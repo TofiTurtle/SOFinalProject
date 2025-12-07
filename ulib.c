@@ -3,6 +3,7 @@
 #include "fcntl.h"
 #include "user.h"
 #include "x86.h"
+#include "syscall.h"
 
 char*
 strcpy(char *s, const char *t)
@@ -103,4 +104,12 @@ memmove(void *vdst, const void *vsrc, int n)
   while(n-- > 0)
     *dst++ = *src++;
   return vdst;
+}
+
+int
+setpriority(int pid, int new_priority)
+{
+  // Llama a la función syscall del kernel con el número de syscall
+  // que definiste (SYS_setpriority) y los argumentos necesarios.
+  return syscall(SYS_setpriority, pid, new_priority);
 }
