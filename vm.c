@@ -249,22 +249,49 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
 // MODIFICACION: Lazy allocation
 // En lugar de asignar memoria física inmediatamente, solo expandimos el tamaño del proceso.
 // La memoria física se asignará cuando haya un page fault.
-
 int
 allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 {
-  // Validaciones básicas
+  char *mem;
+  uint a;
+
   if(newsz >= KERNBASE)
     return 0;
   if(newsz < oldsz)
     return oldsz;
 
-  // En lugar de asignar memoria física aquí,
-  // simplemente retornamos el nuevo tamaño.
-  // La asignación física real ocurrirá cuando el proceso intente acceder
-  // a la memoria, disparando un page fault que será manejado en trap.c
+  a = PGROUNDUP(oldsz);
   
-  cprintf("[LAZY] allocuvm: proceso expandido de %d a %d bytes (sin asignar físicamente)\n", 
+  // Si estamos asignando el stack inicial (primera expansión después del código)
+  // lo asignamos inmediatamente porque es crítico
+  // Detectamos el stack porque típicamente es una expansión pequeña (~8KB)
+  // después del código cargado
+  
+  if(oldsz > 0 && (newsz - oldsz) <= 2*PGSIZE && oldsz < 10*PGSIZE) {
+    // Probablemente es el stack inicial - asignarlo inmediatamente
+    cprintf("[LAZY] Asignando stack inicial de %d a %d (inmediato)\n", 
+            oldsz, newsz);
+    
+    for(; a < newsz; a += PGSIZE){
+      mem = kalloc();
+      if(mem == 0){
+        cprintf("allocuvm out of memory\n");
+        deallocuvm(pgdir, newsz, oldsz);
+        return 0;
+      }
+      memset(mem, 0, PGSIZE);
+      if(mappages(pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0){
+        cprintf("allocuvm out of memory (2)\n");
+        deallocuvm(pgdir, newsz, oldsz);
+        kfree(mem);
+        return 0;
+      }
+    }
+    return newsz;
+  }
+  
+  // Para todo lo demás (heap, expansiones grandes), usar lazy allocation
+  cprintf("[LAZY] allocuvm: expansión lazy de %d a %d bytes\n", 
           oldsz, newsz);
   
   return newsz;
