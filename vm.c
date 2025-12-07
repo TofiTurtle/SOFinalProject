@@ -203,19 +203,8 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
   if((uint) addr % PGSIZE != 0)
     panic("loaduvm: addr must be page aligned");
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walkpgdir(pgdir, addr+i, 1)) == 0) // Cambiado de 0 a 1: crea la entrada si no existe
+    if((pte = walkpgdir(pgdir, addr+i, 0)) == 0)
       panic("loaduvm: address should exist");
-    
-    if(!(*pte & PTE_P)) {  // Si la página no está presente, asignarla ahora
-      char *mem = kalloc();
-      if(mem == 0) {
-        cprintf("loaduvm: out of memory\n");
-        return -1;
-      }
-      memset(mem, 0, PGSIZE);  // Inicializa la página en ceros
-      *pte = V2P(mem) | PTE_P | PTE_W | PTE_U;  // Mapea la página con permisos de usuario
-    }
-    
     pa = PTE_ADDR(*pte);
     if(sz - i < PGSIZE)
       n = sz - i;
@@ -230,54 +219,31 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
 // Allocate page tables and physical memory to grow process from oldsz to
 // newsz, which need not be page aligned.  Returns new size or 0 on error.
 
+// MODIFICACION: Lazy allocation
+// En lugar de asignar memoria física inmediatamente, solo expandimos el tamaño del proceso.
+// La memoria física se asignará cuando haya un page fault.
 
-/**
- * allocuvm - Incrementa el tamaño del heap de un proceso usando lazy allocation
- * @pgdir: Directorio de páginas del proceso
- * @oldsz: Tamaño actual del proceso en bytes
- * @newsz: Nuevo tamaño deseado del proceso en bytes
- * 
- * CAMBIO PARA LAZY ALLOCATION:
- * En lugar de asignar físicamente todas las páginas entre oldsz y newsz,
- * esta versión modificada simplemente actualiza el tamaño del proceso.
- * La memoria física real se asignará más tarde, bajo demanda, cuando el
- * proceso intente acceder a esas direcciones (causando un page fault).
- * 
- * Returns: Nuevo tamaño del proceso, o 0 si hay error
- */
 int
 allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 {
-  // Validación: El nuevo tamaño no puede invadir el espacio del kernel
+
   if(newsz >= KERNBASE)
     return 0;
-  
-  // Si el nuevo tamaño es menor, no hay nada que asignar
   if(newsz < oldsz)
     return oldsz;
+
+  // CAMBIO PRINCIPAL: Ya no asignamos memoria física aquí
+  // Solo retornamos el nuevo tamaño
+  // La asignación real ocurrirá en el page fault handler
   
   return newsz;
 }
+
 
 // Deallocate user pages to bring the process size from oldsz to
 // newsz.  oldsz and newsz need not be page-aligned, nor does newsz
 // need to be less than oldsz.  oldsz can be larger than the actual
 // process size.  Returns the new process size.
-
-
-/**
- * deallocuvm - Reduce el tamaño del proceso liberando páginas
- * @pgdir: Directorio de páginas del proceso
- * @oldsz: Tamaño actual del proceso en bytes
- * @newsz: Nuevo tamaño (menor) del proceso en bytes
- * 
- * CAMBIO PARA LAZY ALLOCATION:
- * Debe manejar correctamente el caso donde algunas páginas en el rango
- * [newsz, oldsz) nunca fueron asignadas físicamente (lazy allocation).
- * Solo liberamos páginas que tienen el bit PTE_P activado.
- * 
- * Returns: Nuevo tamaño del proceso
- */
 int
 deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 {
@@ -288,33 +254,21 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
     return oldsz;
 
   a = PGROUNDUP(newsz);
-  for(; a < oldsz; a += PGSIZE){
+  for(; a  < oldsz; a += PGSIZE){
     pte = walkpgdir(pgdir, (char*)a, 0);
-    
-    // Si no existe entrada en la tabla de páginas, saltar al siguiente bloque
     if(!pte)
       a = PGADDR(PDX(a) + 1, 0, 0) - PGSIZE;
     else if((*pte & PTE_P) != 0){
-
-      // CAMBIO: Solo liberamos si PTE_P está activado
-
-      // Con lazy allocation, algunas páginas pueden tener entradas en la
-      // tabla de páginas pero sin el bit PTE_P, lo que significa que nunca
-      // fueron asignadas físicamente. No intentamos liberar estas páginas.
-      
       pa = PTE_ADDR(*pte);
       if(pa == 0)
         panic("kfree");
       char *v = P2V(pa);
-      kfree(v);       // Liberar la memoria física
-      *pte = 0;       // Limpiar la entrada de la tabla de páginas
+      kfree(v);
+      *pte = 0;
     }
-    // Si PTE_P no está activado, la página nunca fue asignada
-    // No hay memoria física que liberar, simplemente continuamos
   }
   return newsz;
 }
-
 
 // Free a page table and all the physical memory pages
 // in the user part.
@@ -350,19 +304,6 @@ clearpteu(pde_t *pgdir, char *uva)
 
 // Given a parent process's page table, create a copy
 // of it for a child.
-
-
-/**
- * copyuvm - Crea una copia del espacio de direcciones de un proceso
- * @pgdir: Directorio de páginas del proceso padre
- * @sz: Tamaño del proceso
- * 
- * CAMBIO PARA LAZY ALLOCATION:
- * Durante fork(), solo copiamos las páginas que realmente fueron asignadas.
- * Las páginas lazy (sin PTE_P) se omiten; el hijo las asignará bajo demanda.
- * 
- * Returns: Puntero al nuevo directorio de páginas, o 0 si hay error
- */
 pde_t*
 copyuvm(pde_t *pgdir, uint sz)
 {
@@ -373,22 +314,11 @@ copyuvm(pde_t *pgdir, uint sz)
 
   if((d = setupkvm()) == 0)
     return 0;
-    
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walkpgdir(pgdir, (void *) i, 0)) == 0)
       panic("copyuvm: pte should exist");
-    
-
-    // CAMBIO: Saltar páginas no presentes (lazy allocation)
-  
-    // Si la página no tiene el bit PTE_P, significa que nunca fue asignada
-    // debido a lazy allocation. No la copiamos; el proceso hijo la asignará
-    // bajo demanda cuando la acceda.
-  
     if(!(*pte & PTE_P))
-      continue;  // Saltar esta página y continuar con la siguiente
-      
-    // La página está presente, proceder con la copia normal
+      panic("copyuvm: page not present");
     pa = PTE_ADDR(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -404,88 +334,6 @@ copyuvm(pde_t *pgdir, uint sz)
 bad:
   freevm(d);
   return 0;
-}
-
-/**
- * handle_page_fault - Asigna memoria física cuando ocurre un page fault
- * @va: Dirección virtual que causó el page fault
- * 
- * Esta función implementa el núcleo de la lazy allocation. Es llamada desde
- * el manejador de traps (trap.c) cuando la CPU genera un page fault (T_PGFLT).
- * 
- * Funcionamiento:
- * 1. Verifica que la dirección esté en un rango válido del proceso
- * 2. Obtiene/crea la entrada correspondiente en la tabla de páginas
- * 3. Asigna una página física con kalloc()
- * 4. Mapea la página física a la dirección virtual
- * 5. Activa el bit PTE_P para marcar la página como presente
- * 
- * Validaciones:
- * - La dirección debe estar entre el stack y el límite del heap (curproc->sz)
- * - No debe estar en el guard page del stack
- * - Debe haber memoria física disponible
- * 
- * Returns: 0 si se manejó exitosamente, -1 si hay error
- */
-int
-handle_page_fault(uint va)
-{
-  struct proc *curproc = myproc();
-  char *mem;
-  pte_t *pte;
-  uint a;
-
-  // PASO 1: Validar la dirección virtual
- 
-  // Alinear la dirección a límite de página (4KB)
-  a = PGROUNDDOWN(va);
-
-  // Verificar que la dirección esté dentro del espacio válido del proceso
-  // - No debe ser mayor o igual al tamaño del heap (curproc->sz)
-  // - No debe estar por debajo del stack pointer (sería el guard page)
-  if(a >= curproc->sz || a < PGROUNDUP(curproc->tf->esp)) {
-    // Acceso inválido: fuera de los límites permitidos
-    cprintf("handle_page_fault: invalid address 0x%x (sz=0x%x, esp=0x%x)\n",
-            a, curproc->sz, curproc->tf->esp);
-    return -1;
-  }
-
-  // PASO 2: Obtener o crear la entrada en la tabla de páginas
-  // walkpgdir con alloc=1 crea las estructuras necesarias si no existen
-  pte = walkpgdir(curproc->pgdir, (char*)a, 1);
-  if(pte == 0) {
-    cprintf("handle_page_fault: walkpgdir failed for address 0x%x\n", a);
-    return -1;
-  }
-
-  // PASO 3: Verificar que la página no esté ya presente
-  // Si PTE_P está activado, no es un caso de lazy allocation
-  if(*pte & PTE_P) {
-    cprintf("handle_page_fault: page already present at 0x%x\n", a);
-    return -1;
-  }
-
-  // PASO 4: Asignar memoria física
-
-  mem = kalloc();
-  if(mem == 0) {
-    cprintf("handle_page_fault: out of memory for address 0x%x\n", a);
-    return -1;
-  }
-
-
-  // PASO 5: Inicializar la página con ceros
-  // Importante: Las páginas nuevas deben estar en cero (especificación POSIX)
-  memset(mem, 0, PGSIZE);
-
-
-  // PASO 6: Mapear la página con permisos apropiados
-  // PTE_P: Página presente en memoria física
-  // PTE_W: Página escribible (read/write)
-  // PTE_U: Accesible desde modo usuario
-  *pte = V2P(mem) | PTE_P | PTE_W | PTE_U;
-
-  return 0;  // Éxito
 }
 
 //PAGEBREAK!
