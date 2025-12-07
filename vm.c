@@ -344,11 +344,22 @@ copyuvm(pde_t *pgdir, uint sz)
 
   if((d = setupkvm()) == 0)
     return 0;
+  
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walkpgdir(pgdir, (void *) i, 0)) == 0)
-      panic("copyuvm: pte should exist");
-    if(!(*pte & PTE_P))
-      panic("copyuvm: page not present");
+    if((pte = walkpgdir(pgdir, (void *) i, 0)) == 0){
+      // La página puede no existir aún
+      // En lugar de hacer panic, simplemente continuamos
+      // La página se asignará cuando el hijo intente usarla
+      continue;
+    }
+    
+    if(!(*pte & PTE_P)){
+      // La página existe en la tabla pero no está presente
+      // Esto es normal con lazy allocation, continuamos
+      continue;
+    }
+    
+    // La página existe y está presente, copiarla
     pa = PTE_ADDR(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)

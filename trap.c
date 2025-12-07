@@ -44,6 +44,7 @@ handle_lazy_allocation(struct proc *p, uint faultaddr)
   // Alinear dirección al inicio de la página
   a = PGROUNDDOWN(faultaddr);
   
+  // Validación más permisiva
   // Verificar que la dirección esté dentro del rango válido del proceso
   // La dirección debe estar entre el final del código/datos y el tamaño del proceso
   if(faultaddr >= p->sz) {
