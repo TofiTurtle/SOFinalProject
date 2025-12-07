@@ -6,6 +6,13 @@
 #include "memlayout.h"
 #include "mmu.h"
 #include "proc.h"
+#include "spinlock.h"
+
+
+extern struct {
+  struct spinlock lock;
+  struct proc proc[NPROC];
+} ptable;
 
 int
 sys_fork(void)
@@ -75,6 +82,37 @@ sys_sleep(void)
   }
   release(&tickslock);
   return 0;
+}
+
+// Implementación de la nueva syscall
+int
+sys_setpriority(void)
+{
+  int pid;
+  int new_priority;
+  struct proc *p;
+
+  // 1. Obtener los argumentos de usuario
+  if(argint(0, &pid) < 0 || argint(1, &new_priority) < 0)
+    return -1;
+
+  // 2. Validar el rango de prioridad (asumimos 1 a 5)
+  if (new_priority < 1 || new_priority > 5)
+    return -1;
+
+  // 3. Buscar y modificar el proceso
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->pid == pid){
+      // NUEVO SCHEDULER: Actualizar la prioridad y reiniciar el aging
+      p->priority = new_priority;
+      p->ticks_waiting = 0; 
+      release(&ptable.lock);
+      return 0; // Éxito
+    }
+  }
+  release(&ptable.lock);
+  return -1; // Proceso no encontrado
 }
 
 // return how many clock tick interrupts have occurred

@@ -7,6 +7,11 @@
 #include "proc.h"
 #include "spinlock.h"
 
+// NEW SCHEDULER: CONSTANTS
+#define MAX_PRIORITY 5           // La prioridad más alta
+#define MIN_PRIORITY 1           // La prioridad más baja
+#define AGING_THRESHOLD 100      // Ticks de espera antes de aumentar la prioridad
+
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
@@ -88,6 +93,9 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+
+  p->priority = 3;
+  p->ticks_waiting = 0;
 
   release(&ptable.lock);
 
@@ -327,31 +335,57 @@ scheduler(void)
   c->proc = 0;
   
   for(;;){
-    // Enable interrupts on this processor.
     sti();
 
-    // Loop over process table looking for process to run.
     acquire(&ptable.lock);
+    
+    // NEW SCHEDULER: Fase 1 - Implementación del Aging
+    // Recorrer todos los procesos RUNNABLE y aplicar Aging.
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-        continue;
-
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
-
-      swtch(&(c->scheduler), p->context);
-      switchkvm();
-
-      // Process is done running for now.
-      // It should have changed its p->state before coming back.
-      c->proc = 0;
+        if(p->state == RUNNABLE){
+            p->ticks_waiting++;
+            // Si ha esperado más que el umbral y no está en la máxima prioridad
+            if(p->ticks_waiting >= AGING_THRESHOLD && p->priority < MAX_PRIORITY){
+                p->priority++;            // Aumentar la prioridad (más alto es mejor)
+                p->ticks_waiting = 0;     // Reiniciar el contador de espera
+            }
+        }
     }
-    release(&ptable.lock);
+    
+    // NEW SCHEDULER: Fase 2 - Selección por Prioridad
+    // Buscamos el proceso RUNNABLE con la prioridad más alta.
+    struct proc *high_priority_p = 0;
+    int max_prio = MIN_PRIORITY - 1; // Un valor inferior a la mínima prioridad
 
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->state != RUNNABLE)
+            continue;
+        
+        if (p->priority > max_prio) {
+            max_prio = p->priority;
+            high_priority_p = p;
+        } 
+        // Nota: Si hay empate en prioridad, el ciclo for sigue el orden natural (Round-Robin parcial)
+        // lo que es aceptable para procesos de la misma prioridad.
+    }
+    
+    p = high_priority_p; // El proceso seleccionado (puede ser 0 si no hay RUNNABLE)
+
+    if (p != 0) {
+        // Switch to chosen process (mismo código que el Round-Robin original)
+        c->proc = p;
+        switchuvm(p);
+        p->state = RUNNING;
+
+        swtch(&(c->scheduler), p->context);
+        switchkvm();
+
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        c->proc = 0;
+    }
+    
+    release(&ptable.lock);
   }
 }
 
