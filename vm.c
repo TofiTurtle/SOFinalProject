@@ -203,8 +203,19 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
   if((uint) addr % PGSIZE != 0)
     panic("loaduvm: addr must be page aligned");
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walkpgdir(pgdir, addr+i, 0)) == 0)
+    if((pte = walkpgdir(pgdir, addr+i, 1)) == 0) // Cambiado de 0 a 1: crea la entrada si no existe
       panic("loaduvm: address should exist");
+    
+    if(!(*pte & PTE_P)) {  // Si la página no está presente, asignarla ahora
+      char *mem = kalloc();
+      if(mem == 0) {
+        cprintf("loaduvm: out of memory\n");
+        return -1;
+      }
+      memset(mem, 0, PGSIZE);  // Inicializa la página en ceros
+      *pte = V2P(mem) | PTE_P | PTE_W | PTE_U;  // Mapea la página con permisos de usuario
+    }
+    
     pa = PTE_ADDR(*pte);
     if(sz - i < PGSIZE)
       n = sz - i;
