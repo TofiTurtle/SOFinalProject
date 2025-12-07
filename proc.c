@@ -210,6 +210,7 @@ fork(void)
 
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;
+  np->priority = curproc->priority;
 
   for(i = 0; i < NOFILE; i++)
     if(curproc->ofile[i])

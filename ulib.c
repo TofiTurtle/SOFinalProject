@@ -4,6 +4,7 @@
 #include "user.h"
 #include "x86.h"
 #include "syscall.h"
+#include "user.h"
 
 char*
 strcpy(char *s, const char *t)
