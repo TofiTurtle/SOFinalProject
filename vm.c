@@ -57,7 +57,7 @@ walkpgdir(pde_t *pgdir, const void *va, int alloc)
 // Create PTEs for virtual addresses starting at va that refer to
 // physical addresses starting at pa. va and size might not
 // be page-aligned.
-static int
+int
 mappages(pde_t *pgdir, void *va, uint size, uint pa, int perm)
 {
   char *a, *last;
@@ -226,19 +226,22 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
 int
 allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 {
-
+  // Validaciones básicas
   if(newsz >= KERNBASE)
     return 0;
   if(newsz < oldsz)
     return oldsz;
 
-  // CAMBIO PRINCIPAL: Ya no asignamos memoria física aquí
-  // Solo retornamos el nuevo tamaño
-  // La asignación real ocurrirá en el page fault handler
+  // En lugar de asignar memoria física aquí,
+  // simplemente retornamos el nuevo tamaño.
+  // La asignación física real ocurrirá cuando el proceso intente acceder
+  // a la memoria, disparando un page fault que será manejado en trap.c
+  
+  cprintf("[LAZY] allocuvm: proceso expandido de %d a %d bytes (sin asignar físicamente)\n", 
+          oldsz, newsz);
   
   return newsz;
 }
-
 
 // Deallocate user pages to bring the process size from oldsz to
 // newsz.  oldsz and newsz need not be page-aligned, nor does newsz
