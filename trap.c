@@ -45,8 +45,17 @@ handle_lazy_allocation(struct proc *p, uint faultaddr)
   a = PGROUNDDOWN(faultaddr);
   
   // Verificar que la dirección esté dentro del rango válido del proceso
-  if(a >= p->sz || a < PGROUNDUP(p->tf->esp)) {
-    return -1; // Dirección inválida
+  // La dirección debe estar entre el final del código/datos y el tamaño del proceso
+  if(faultaddr >= p->sz) {
+    cprintf("[LAZY] handle_lazy_allocation: faultaddr 0x%x fuera de rango (sz=%d)\n", 
+            faultaddr, p->sz);
+    return -1; // Dirección más allá del tamaño del proceso
+  }
+  
+  // No permitir acceso a la página 0 (NULL pointer dereference)
+  if(faultaddr < PGSIZE) {
+    cprintf("[LAZY] handle_lazy_allocation: acceso a NULL pointer\n");
+    return -1;
   }
   
   // Asignar memoria física
@@ -61,12 +70,12 @@ handle_lazy_allocation(struct proc *p, uint faultaddr)
   
   // Mapear la página en la tabla de páginas
   if(mappages(pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0){
-    cprintf("handle_lazy_allocation: mappages fallo\n");
+    cprintf("[LAZY] handle_lazy_allocation: mappages falló\n");
     kfree(mem);
     return -1;
   }
   
-  cprintf("Pagina asignada en faultaddr=0x%x para pid=%d\n", faultaddr, p->pid);
+  cprintf("[LAZY] Página asignada: addr=0x%x pid=%d\n", a, p->pid);
   return 0;
 }
 
