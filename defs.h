@@ -186,7 +186,6 @@ void            switchkvm(void);
 int             copyout(pde_t*, uint, void*, uint);
 void            clearpteu(pde_t *pgdir, char *uva);
 int             mappages(pde_t*, void*, uint, uint, int);  // Modificada para lazy allocation
-pte_t*          walkpgdir(pde_t*, const void*, int);       // Modificada para lazy allocation
 int             handle_page_fault(uint); // Nueva función para manejar fallos de página
 
 // number of elements in fixed-size array
