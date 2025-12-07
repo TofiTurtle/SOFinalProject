@@ -36,6 +36,9 @@ idtinit(void)
 void
 trap(struct trapframe *tf)
 {
+  // Declaración de variables al principio de la función
+  uint va;
+
   if(tf->trapno == T_SYSCALL){
     if(myproc()->killed)
       exit();
@@ -77,11 +80,11 @@ trap(struct trapframe *tf)
   // a una página que no ha sido asignada, esta función se encarga de asignar la memoria
   // necesaria y mapearla en la tabla de páginas del proceso. Esto es parte de la 
   // implementación de la "asignación perezosa de memoria".
-  case T_PGFLT:  // Si es un fallo de página, se asigna memoria perezosa
-    uint va = rcr2();  // Dirección virtual que causó el fallo
+ case T_PGFLT:  // Si es un fallo de página, se asigna memoria perezosa
+    va = rcr2();  // Dirección virtual que causó el fallo
 
     // Verificamos si la dirección que causó el fallo está fuera del rango
-    // de memoria del proceso (es decir, si no está fuera de los límites de su memoria asignada)
+    // de memoria del proceso
     if (myproc()->sz < va) {  // Usamos myproc() para acceder al proceso actual
         // Asignamos una nueva página de memoria cuando ocurre un fallo de página
         char *mem = kalloc();  
