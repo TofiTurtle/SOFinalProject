@@ -32,7 +32,7 @@ seginit(void)
 // Return the address of the PTE in page table pgdir
 // that corresponds to virtual address va.  If alloc!=0,
 // create any required page table pages.
-static pte_t *
+pte_t *
 walkpgdir(pde_t *pgdir, const void *va, int alloc)
 {
   pde_t *pde;
@@ -199,17 +199,44 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
 {
   uint i, pa, n;
   pte_t *pte;
+  char *mem;
 
   if((uint) addr % PGSIZE != 0)
     panic("loaduvm: addr must be page aligned");
+  
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walkpgdir(pgdir, addr+i, 0)) == 0)
-      panic("loaduvm: address should exist");
+    // Buscar la página, si no existe asignarla
+    if((pte = walkpgdir(pgdir, addr+i, 0)) == 0){
+      // La página no existe en la tabla de páginas, crearla
+      if((pte = walkpgdir(pgdir, addr+i, 1)) == 0)
+        panic("loaduvm: walkpgdir failed");
+    }
+    
+    // Si la página no tiene el bit PTE_P (no está presente físicamente)
+    if(!(*pte & PTE_P)){
+      // Asignar memoria física para esta página
+      mem = kalloc();
+      if(mem == 0){
+        cprintf("loaduvm: out of memory\n");
+        return -1;
+      }
+      memset(mem, 0, PGSIZE);
+      
+      // Mapear la página recién asignada
+      *pte = V2P(mem) | PTE_P | PTE_W | PTE_U;
+      
+      cprintf("[LAZY-LOAD] Página asignada en loaduvm: addr=0x%x\n", addr+i);
+    }
+    
+    // Ahora la página existe, obtener su dirección física
     pa = PTE_ADDR(*pte);
+    
     if(sz - i < PGSIZE)
       n = sz - i;
     else
       n = PGSIZE;
+    
+    // Leer desde el archivo al espacio físico
     if(readi(ip, P2V(pa), offset+i, n) != n)
       return -1;
   }

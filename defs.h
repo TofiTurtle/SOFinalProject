@@ -185,8 +185,9 @@ void            switchuvm(struct proc*);
 void            switchkvm(void);
 int             copyout(pde_t*, uint, void*, uint);
 void            clearpteu(pde_t *pgdir, char *uva);
+int             mappages(pde_t*, void*, uint, uint, int);  // Modificada para lazy allocation
+pte_t*          walkpgdir(pde_t*, const void*, int);       // Modificada para lazy allocation
 int             handle_page_fault(uint); // Nueva función para manejar fallos de página
-int             mappages(pde_t*, void*, uint, uint, int); // Modificada para ser usada en lazy allocation
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
