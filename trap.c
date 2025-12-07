@@ -71,6 +71,29 @@ trap(struct trapframe *tf)
     uartintr();
     lapiceoi();
     break;
+  
+  // CAMBIOS REALIZADOS:
+  // Manejador de excepciones de página (page fault). Si un proceso intenta acceder
+  // a una página que no ha sido asignada, esta función se encarga de asignar la memoria
+  // necesaria y mapearla en la tabla de páginas del proceso. Esto es parte de la 
+  // implementación de la "asignación perezosa de memoria".
+  case T_PGFLT:  // Si es un fallo de página, se asigna memoria perezosa
+    uint va = rcr2();  // Dirección virtual que causó el fallo
+
+    // Verificamos si la dirección que causó el fallo está fuera del rango
+    // de memoria del proceso (es decir, si no está fuera de los límites de su memoria asignada)
+    if (myproc()->sz < va) {  // Usamos myproc() para acceder al proceso actual
+        // Asignamos una nueva página de memoria cuando ocurre un fallo de página
+        char *mem = kalloc();  
+        if (mem == 0)
+            panic("out of memory");  // Si no hay memoria disponible, hacemos panic
+
+        // Mapeamos la página recién asignada en la tabla de páginas del proceso
+        // Esto permite que el proceso acceda a la página recién asignada
+        mappages(myproc()->pgdir, va, PGSIZE, V2P(mem), PTE_W | PTE_U);
+    }
+    return;  // Regresamos para continuar el procesamiento después de asignar la memoria
+
   case T_IRQ0 + 7:
   case T_IRQ0 + IRQ_SPURIOUS:
     cprintf("cpu%d: spurious interrupt at %x:%x\n",

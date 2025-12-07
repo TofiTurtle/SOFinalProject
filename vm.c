@@ -218,34 +218,45 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
 
 // Allocate page tables and physical memory to grow process from oldsz to
 // newsz, which need not be page aligned.  Returns new size or 0 on error.
-int
-allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
-{
-  char *mem;
-  uint a;
 
-  if(newsz >= KERNBASE)
-    return 0;
-  if(newsz < oldsz)
-    return oldsz;
+// CAMBIOS REALIZADOS:
+// Asigna memoria virtual a un proceso, pero solo cuando se accede a ella.
+// En lugar de asignar toda la memoria al incrementar el tamaño del heap,
+// las páginas no se asignan hasta que el proceso intente acceder a ellas.
+// Esto implementa la "asignación perezosa de memoria" (Lazy Memory Allocation).
+int allocuvm(pde_t *pgdir, uint oldsz, uint newsz) {
+    char *mem;
+    uint a;
 
-  a = PGROUNDUP(oldsz);
-  for(; a < newsz; a += PGSIZE){
-    mem = kalloc();
-    if(mem == 0){
-      cprintf("allocuvm out of memory\n");
-      deallocuvm(pgdir, newsz, oldsz);
-      return 0;
+    // Verificación: el nuevo tamaño no debe exceder el límite del espacio de memoria del kernel
+    if (newsz >= KERNBASE)
+        return 0;
+
+    // Si el nuevo tamaño es menor que el antiguo, no hay necesidad de asignar memoria
+    if (newsz < oldsz)
+        return oldsz;
+
+    // Alineamos el tamaño del viejo tamaño de heap hacia arriba, asegurándonos de que esté alineado a páginas
+    a = PGROUNDUP(oldsz); 
+
+    // Iteramos sobre el rango de memoria entre el tamaño antiguo y el nuevo
+    for (; a < newsz; a += PGSIZE) {
+        // Asignamos una página de memoria, pero no la mapeamos aún
+        mem = kalloc();  
+        if (mem == 0) {
+            cprintf("allocuvm out of memory\n");
+            // Si no hay memoria suficiente, liberamos la memoria previamente asignada
+            deallocuvm(pgdir, newsz, oldsz);  
+            return 0;
+        }
+        memset(mem, 0, PGSIZE);  // Marcamos la página como no válida
+
+        // No asignamos la página a la tabla de páginas aún
+        // La asignación real ocurrirá cuando se acceda a la página (fallo de página)
     }
-    memset(mem, 0, PGSIZE);
-    if(mappages(pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0){
-      cprintf("allocuvm out of memory (2)\n");
-      deallocuvm(pgdir, newsz, oldsz);
-      kfree(mem);
-      return 0;
-    }
-  }
-  return newsz;
+
+    // Devolvemos el nuevo tamaño del heap
+    return newsz;  
 }
 
 // Deallocate user pages to bring the process size from oldsz to
