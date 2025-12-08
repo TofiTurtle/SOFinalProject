@@ -32,6 +32,54 @@ idtinit(void)
   lidt(idt, sizeof(idt));
 }
 
+// FUNCION NUEVA: Manejador de lazy allocation
+// Esta funcion se llama cuando hay un page fault y asigna la memoria fisica que faltaba
+int
+handle_lazy_allocation(struct proc *p, uint faultaddr)
+{
+  char *mem;
+  uint a;
+  pde_t *pgdir = p->pgdir;
+  
+  // Alinear dirección al inicio de la página
+  a = PGROUNDDOWN(faultaddr);
+  
+  // Validación más permisiva
+  // Verificar que la dirección esté dentro del rango válido del proceso
+  // La dirección debe estar entre el final del código/datos y el tamaño del proceso
+  if(faultaddr >= p->sz) {
+    cprintf("[LAZY] handle_lazy_allocation: faultaddr 0x%x fuera de rango (sz=%d)\n", 
+            faultaddr, p->sz);
+    return -1; // Dirección más allá del tamaño del proceso
+  }
+  
+  // No permitir acceso a la página 0 (NULL pointer dereference)
+  if(faultaddr < PGSIZE) {
+    cprintf("[LAZY] handle_lazy_allocation: acceso a NULL pointer\n");
+    return -1;
+  }
+  
+  // Asignar memoria física
+  mem = kalloc();
+  if(mem == 0){
+    cprintf("[LAZY] handle_lazy_allocation: sin memoria disponible\n");
+    return -1;
+  }
+  
+  // Limpiar la página
+  memset(mem, 0, PGSIZE);
+  
+  // Mapear la página en la tabla de páginas
+  if(mappages(pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0){
+    cprintf("[LAZY] handle_lazy_allocation: mappages falló\n");
+    kfree(mem);
+    return -1;
+  }
+  
+  cprintf("[LAZY] Página asignada: addr=0x%x pid=%d\n", a, p->pid);
+  return 0;
+}
+
 //PAGEBREAK: 41
 void
 trap(struct trapframe *tf)
@@ -76,6 +124,32 @@ trap(struct trapframe *tf)
     cprintf("cpu%d: spurious interrupt at %x:%x\n",
             cpuid(), tf->cs, tf->eip);
     lapiceoi();
+    break;
+  
+  // MODIFICACIÓN: Manejar page faults (T_PGFLT)
+  case T_PGFLT:
+    {
+      uint faultaddr = rcr2(); // Obtener dirección que causó el fault
+      struct proc *p = myproc();
+      
+      if(p == 0) {
+        // Page fault en kernel - esto es un error
+        cprintf("unexpected page fault in kernel at 0x%x\n", faultaddr);
+        panic("trap");
+      }
+      
+      // Intentar manejar con lazy allocation
+      if(handle_lazy_allocation(p, faultaddr) == 0) {
+        // Éxito: la página fue asignada, continuar ejecución
+        break;
+      }
+      
+      // Si llegamos aquí, el page fault no pudo ser manejado
+      // (acceso inválido a memoria)
+      cprintf("pid %d: page fault at 0x%x - invalid memory access\n", 
+              p->pid, faultaddr);
+      p->killed = 1;
+    }
     break;
 
   //PAGEBREAK: 13

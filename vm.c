@@ -57,7 +57,7 @@ walkpgdir(pde_t *pgdir, const void *va, int alloc)
 // Create PTEs for virtual addresses starting at va that refer to
 // physical addresses starting at pa. va and size might not
 // be page-aligned.
-static int
+int
 mappages(pde_t *pgdir, void *va, uint size, uint pa, int perm)
 {
   char *a, *last;
@@ -199,17 +199,44 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
 {
   uint i, pa, n;
   pte_t *pte;
+  char *mem;
 
   if((uint) addr % PGSIZE != 0)
     panic("loaduvm: addr must be page aligned");
+  
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walkpgdir(pgdir, addr+i, 0)) == 0)
-      panic("loaduvm: address should exist");
+    // Buscar la página, si no existe asignarla
+    if((pte = walkpgdir(pgdir, addr+i, 0)) == 0){
+      // La página no existe en la tabla de páginas, crearla
+      if((pte = walkpgdir(pgdir, addr+i, 1)) == 0)
+        panic("loaduvm: walkpgdir failed");
+    }
+    
+    // Si la página no tiene el bit PTE_P (no está presente físicamente)
+    if(!(*pte & PTE_P)){
+      // Asignar memoria física para esta página
+      mem = kalloc();
+      if(mem == 0){
+        cprintf("loaduvm: out of memory\n");
+        return -1;
+      }
+      memset(mem, 0, PGSIZE);
+      
+      // Mapear la página recién asignada
+      *pte = V2P(mem) | PTE_P | PTE_W | PTE_U;
+      
+      cprintf("[LAZY-LOAD] Página asignada en loaduvm: addr=0x%x\n", addr+i);
+    }
+    
+    // Ahora la página existe, obtener su dirección física
     pa = PTE_ADDR(*pte);
+    
     if(sz - i < PGSIZE)
       n = sz - i;
     else
       n = PGSIZE;
+    
+    // Leer desde el archivo al espacio físico
     if(readi(ip, P2V(pa), offset+i, n) != n)
       return -1;
   }
@@ -218,6 +245,10 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
 
 // Allocate page tables and physical memory to grow process from oldsz to
 // newsz, which need not be page aligned.  Returns new size or 0 on error.
+
+// MODIFICACION: Lazy allocation
+// En lugar de asignar memoria física inmediatamente, solo expandimos el tamaño del proceso.
+// La memoria física se asignará cuando haya un page fault.
 int
 allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 {
@@ -230,21 +261,39 @@ allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
     return oldsz;
 
   a = PGROUNDUP(oldsz);
-  for(; a < newsz; a += PGSIZE){
-    mem = kalloc();
-    if(mem == 0){
-      cprintf("allocuvm out of memory\n");
-      deallocuvm(pgdir, newsz, oldsz);
-      return 0;
+  
+  // Si estamos asignando el stack inicial (primera expansión después del código)
+  // lo asignamos inmediatamente porque es crítico
+  // Detectamos el stack porque típicamente es una expansión pequeña (~8KB)
+  // después del código cargado
+  
+  if(oldsz > 0 && (newsz - oldsz) <= 2*PGSIZE && oldsz < 10*PGSIZE) {
+    // Probablemente es el stack inicial - asignarlo inmediatamente
+    cprintf("[LAZY] Asignando stack inicial de %d a %d (inmediato)\n", 
+            oldsz, newsz);
+    
+    for(; a < newsz; a += PGSIZE){
+      mem = kalloc();
+      if(mem == 0){
+        cprintf("allocuvm out of memory\n");
+        deallocuvm(pgdir, newsz, oldsz);
+        return 0;
+      }
+      memset(mem, 0, PGSIZE);
+      if(mappages(pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0){
+        cprintf("allocuvm out of memory (2)\n");
+        deallocuvm(pgdir, newsz, oldsz);
+        kfree(mem);
+        return 0;
+      }
     }
-    memset(mem, 0, PGSIZE);
-    if(mappages(pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0){
-      cprintf("allocuvm out of memory (2)\n");
-      deallocuvm(pgdir, newsz, oldsz);
-      kfree(mem);
-      return 0;
-    }
+    return newsz;
   }
+  
+  // Para todo lo demás (heap, expansiones grandes), usar lazy allocation
+  cprintf("[LAZY] allocuvm: expansión lazy de %d a %d bytes\n", 
+          oldsz, newsz);
+  
   return newsz;
 }
 
@@ -322,11 +371,22 @@ copyuvm(pde_t *pgdir, uint sz)
 
   if((d = setupkvm()) == 0)
     return 0;
+  
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walkpgdir(pgdir, (void *) i, 0)) == 0)
-      panic("copyuvm: pte should exist");
-    if(!(*pte & PTE_P))
-      panic("copyuvm: page not present");
+    if((pte = walkpgdir(pgdir, (void *) i, 0)) == 0){
+      // La página puede no existir aún
+      // En lugar de hacer panic, simplemente continuamos
+      // La página se asignará cuando el hijo intente usarla
+      continue;
+    }
+    
+    if(!(*pte & PTE_P)){
+      // La página existe en la tabla pero no está presente
+      // Esto es normal con lazy allocation, continuamos
+      continue;
+    }
+    
+    // La página existe y está presente, copiarla
     pa = PTE_ADDR(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -391,4 +451,3 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
 // Blank page.
 //PAGEBREAK!
 // Blank page.
-
